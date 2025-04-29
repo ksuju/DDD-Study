@@ -430,3 +430,198 @@ Product의 경우 제품을 생성한 Store의 식별자를 필요로 함
 \> Product를 생성할 때 필요한 데이터의 일부를 직접 제공하면서 동시에 도메인 로직을 함께 구현 가능
 
 **\>>> Product 생성 가능 여부를 확인하는 도메인은 Store에 위치함. 해당 로직을 변경해도 도메인 영역의 Store만 변경하면 되고, 응용 서비스는 변경하지 않아도 된다!!!!!**
+
+
+## Chapter 4. 리포지터리와 모델 구현
+
+### **1\. JPA를 이용한 리포지터리 구현**
+
+**1) 모듈 위치**
+
+\- 리포지토리는 애그리거트와 같이 도메인 영역에 속함
+
+\- 리포지토리를 구현한 클래스는 인프라스트럭처 영역에 속함
+
+### **2\. 리포지터리 기본 기능 구현**
+
+\- 리포지터리가 제공하는 두 가지 기본 기능은? >  save(), findById()
+
+\- 리포지터리 인터페이스는 애그리거트 루트를 기준으로 작성한다!
+
+\- JPA의 EntityManager를 이용해 다른 추가적인 기능을 구현 가능
+
+### **3\. 스프링 데이터 JPA를 이용한 리포지터리 구현**
+
+\- 스프링과 JPA를 함께 적용할 때 사용함
+
+\* 스프링 데이터 JPA의 기본적인 규칙
+
+1) 엔티티를 저장하는 메서드
+
+\> save()
+
+2) 엔티티를 조회하는 메서드
+
+\> findById()
+
+3) 특정 프로퍼티를 이용해서 엔티티를 조회하는 메서드
+
+\- findBy(프로퍼티 값)
+
+\> findByOrderer()
+
+4) 중첩 프로퍼티를 통해 엔티티를 조회하는 메서드
+
+\> findByOrdererMemberId()
+
+5) 엔티티를 삭제하는 메서드
+
+\> delete()
+
+\> deleteById()
+
+### **4\. 매핑 구현**
+
+**1) 엔티티와 밸류 기본 매핑 구현**
+
+\- 애그리거트 루트는 엔티티이므로 @Entity로 매핑 설정
+
+\- 한 테이블에 엔티티와 밸류 데이터가 같이 있다면? 밸류는 @Embeddable, 밸류 타입 프로퍼티는 @Embedded
+
+**2) 기본 생성자**
+
+\- JPA에서 @Entity와 @Embeddable 클래스를 매핑하려면 기본 생성자를 제공해야 함. 왜?
+
+\> DB에서 데이터를 읽어와 매핑된 객체를 생성할 때 기본 생성자를 사용해서 객체를 생성하기 때문에!
+
+\> Lombok으로 쉽게 처리하자! @NoArgsConstructor
+
+**3) 필드 접근 방식 사용**
+
+\- JPA는 필드와 메서드의 두 가지 방식으로 매핑을 처리할 수 있음.
+
+\- 메서드 방식은 프로퍼티를 위한 get/set 메서드를 구현하면 됨
+
+\> Lombok의 @Getter, @Setter로 쉽게 처리하자!
+
+\> **set 메서드는 함부로 구현하지 말것,**
+
+앞선 챕터에서 정리했던 것처럼 외부에 set 메서드 대신 의도가 잘 드러나는 기능을 제공해야함
+
+ex) setState() -> cancel()
+
+**4) AttributeConverter를 이용한 밸류 매핑 처리**
+
+\- 두 개 이상의 프로퍼티를 가진 밸류 타입을 한 개 컬럼에 매핑하려고 할 때 사용됨
+
+\- convertToDatabaseColumn() 메서드 : 밸류 타입을 DB 컬럼 값으로 변환
+
+\- convertToEntityAttribute() 메서드 : DB 컬럼 값을 밸류로 변환
+
+```
+public interface AttributeConverter<X, Y> {	
+	public Y convertToDatabaseColumn (X attribute);
+	public X convertToEntityAttribute (Y dbData);
+}
+```
+
+\- 위 예시에서 타입 파라미터 X는 밸류 타입, Y는 DB 타입
+
+\- AttributeConverter 인터페이스를 구현한 클래스는 @Converter 애너테이션을 적용해야 함!
+
+```
+// Money를 위한 AttributeConverter 구현
+
+@Converter(autoApply = true)
+public class MoneyConverter implements AttributeConverter<Money, Integer〉{
+
+    @Override
+    public Integer convertToDatabaseColumn (Money money) {
+    	return money = = null ? null : money.getValue();
+    }
+    
+	@Override
+    public Money convertToEntityAttribute(Integer value) {
+    	return value = = null ? null ： new Money(value);
+    }
+}
+```
+
+\> autoApply 속성이
+
+true : 해당하는 타입의 모든 프로퍼티에 대해 자동으로 적용
+
+```
+// autuApply = true 예시
+
+©Entity
+@Table(name = "purchase_order")
+public class Order {
+
+    @Column(name = "total_amounts")
+    private Money totalAmounts; // MoneyConverter를 적용해서 값 변환
+
+
+}
+```
+
+false (기본 값) : 프로퍼티 값을 변경할 때 사용할 컨버터를 직접 지정해야 함
+
+```
+// autuApply = false 예시
+
+©Entity
+@Table(name = "purchase_order")
+public class Order {
+
+    @Column(name = "total_amounts")
+    @Convert(converter = MoneyConverter.class) // 사용할 컨버터 직접 지정
+    private Money totalAmounts;
+
+
+}
+```
+
+**5) 밸류 컬렉션 : 별도 테이블 매핑**
+
+\- @ElementCollection과 @CollectionTable을 함께 사용
+
+\> @CollectionTable : 밸류를 저장할 테이블을 지정하는 어노테이션
+
+**6) 밸류 컬렉션 : 한 개 컬럼 매핑**
+
+\- AttributeConverter를 사용하면 밸류 컬렉션을 한 개 컬럼에 쉽게 매핑 가능! (4-4 참고)
+
+**7) 밸류를 이용한 ID 매핑**
+
+\- 밸류 타입을 식별자로 매핑하면, @Id 대신 @EmbeddedId 어노테이션을 사용함
+
+\- JPA에서 식별자 타입은 Serializable 이어야 하므로, 식별자로 사용할 밸류 타입은 Serializable 인터페이스를 상속받아야함
+
+**8) 밸류 컬렉션을 @Entity로 매핑하기**
+
+\- 밸류인데 @Entity를 사용해야 할 때도 있음
+
+\- JPA에서 상속 구조를 갖는 밸류 타입을 사용하려면, @Embeddable 대신 @Entity를 사용해야함
+
+### **5\. 애그리거트 로딩 전략**
+
+\- JPA 매핑을 설정할 때는 애그리거트에 속한 객체가 모두 모여야 완전한 하나가 됨!
+
+\> FetchType.EAGER (즉시 로딩)을 이용하면 조회 시점에서 완전한 상태의 애그리거트를 로딩 가능
+
+\> 그러나 컬렉션에 대해서 즉시 로딩을 사용하면 문제가 될 수 있음
+
+\> 애그리거트에 맞게 지연 로딩과 즉시 로딩을 잘 설정해야 함
+
+\* **기본적으로는 LAZY를 사용, 정말 필요한 상황에만 EAGER를 명시적으로 사용**함.
+
+\* 예를 들면, 작은 규모의 애그리거트 또는 항상 함께 조회해야 하는 경우 EAGER를 사용한다.
+
+### **6\. 도메인 구현과 DIP**
+
+\- DIP에 따르면 도메인이 인프라에 의존해서는 안됨 그러나 우리는 JPA와 같은 라이브러리를 사용하며
+
+도메인이 인프라에 의존하는 상황을 만든다. 왜? 이렇게 하면 어노테이션만 붙이면 되서 편하니까!
+
+\> **DIP를 완벽하게 지키면 좋음, 그러나 개발 편의성과 실용성을 챙기는 것 또한 중요함!**
