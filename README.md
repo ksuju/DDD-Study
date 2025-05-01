@@ -625,3 +625,161 @@ public class Order {
 도메인이 인프라에 의존하는 상황을 만든다. 왜? 이렇게 하면 어노테이션만 붙이면 되서 편하니까!
 
 \> **DIP를 완벽하게 지키면 좋음, 그러나 개발 편의성과 실용성을 챙기는 것 또한 중요함!**
+
+## Chapter 5. 스프링 데이터 JPA를 이용한 조회 기능
+
+### **\* JPA의 Specification (스펙)**
+
+\- 다양한 검색 조건을 조합해야 할 때 **필요한 조합마다 find 메서드를 정의하는것은 좋은 방법이 아님!**
+
+```
+List<Order> findByOrdererId(String ordererId);
+List<Order> findByOrdererIdAndStatus(String ordererId, OrderStatus status);
+List<Order> findByOrdererIdAndFromDateAfter(String ordererId, Date fromDate);
+List<Order> findByOrdererIdAndFromDateAfterAndStatus(String ordererId, Date fromDate, OrderStatus status);
+// ... 조합이 늘어날수록 메서드가 기하급수적으로 늘어남
+```
+
+\- 위와 같은 문제점이 발생하는데, 이런 경우 JPA의 **'Specification (스펙)' 기능을 사용하면 동적으로 조건을 조합 가능!**
+
+```
+public interface OrderRepository extends JpaRepository<Order, Long>, JpaSpecificationExecutor<Order> {
+}
+
+// 검색 조건을 동적으로 조합
+Specification<Order> spec = Specification.where(OrderSpecs.hasOrdererId("user1"))
+    .and(OrderSpecs.hasStatus(OrderStatus.PAID))
+    .and(OrderSpecs.orderDateAfter(someDate));
+
+List<Order> results = orderRepository.findAll(spec);
+```
+
+\- 스펙을 충족하는 엔티티를 검색하고 싶으면 findAll() 메서드를 사용하면 된다.
+
+\- 스펙 인터페이스는 and, or, not, where 등의 메서드를 제공함
+
+### **\* 스펙 빌더 클래스**
+
+\- 스펙 구조가 복잡할 때는, 스펙 빌더 클래스를 사용하면 이를 완화할 수 있다.
+
+\- and(), ifHasText(), ifTrue() 메서드 외 필요한 메서드를 추가해서 사용 가능하다.
+
+```
+// 스펙 빌더 클래스
+public class SpecBuilder<T> {
+    private List<Specification<T>> specs = new ArrayList<>();
+
+    public static <T> SpecBuilder<T> builder() {
+        return new SpecBuilder<>();
+    }
+
+    public SpecBuilder<T> and(Specification<T> spec) {
+        if (spec != null) specs.add(spec);
+        return this;
+    }
+
+    public SpecBuilder<T> ifHasText(String value, Function<String, Specification<T>> specSupplier) {
+        if (value != null && !value.trim().isEmpty()) {
+            specs.add(specSupplier.apply(value));
+        }
+        return this;
+    }
+
+    public SpecBuilder<T> ifNotNull(Object value, Function<Object, Specification<T>> specSupplier) {
+        if (value != null) {
+            specs.add(specSupplier.apply(value));
+        }
+        return this;
+    }
+
+    public Specification<T> toSpec() {
+        return specs.stream().reduce(Specification::and).orElse(null);
+    }
+}
+```
+
+```
+// 스펙 정의 예시
+public class UserSpecs {
+    public static Specification<User> nameLike(String name) {
+        return (root, query, cb) -> cb.like(root.get("name"), "%" + name + "%");
+    }
+    public static Specification<User> createdAfter(LocalDateTime dateTime) {
+        return (root, query, cb) -> cb.greaterThan(root.get("createdAt"), dateTime);
+    }
+}
+```
+
+```
+// 빌더를 활용한 동적 검색 조건 조합
+public List<User> searchUsers(String name, LocalDateTime createdAfter) {
+    Specification<User> spec = SpecBuilder.<User>builder()
+        .ifHasText(name, UserSpecs::nameLike)
+        .ifNotNull(createdAfter, dt -> UserSpecs.createdAfter((LocalDateTime) dt))
+        .toSpec();
+
+    return userRepository.findAll(spec);
+}
+```
+
+### **\* 정렬 지정하기**
+
+\- JPA는 두 가지 방법을 사용해서 정렬을 지정할 수 있음
+
+1) 메서드 이름에 OrderBy를 사용해서 정렬 기준 지정
+
+2) Sort를 인자로 전달
+
+```
+findByOrdererIdOrderByOrderDateDeseNumberAsc
+```
+
+\- 위와 같이 두 가지 이상의 프로퍼티에 대한 정렬 순서도 지정할 수 있음
+
+\- **프로퍼티가 많아지면 메서드 이름이 길어지는 단점이 있는데 이를 해결하기 위해 Sort 타입을 사용함**
+
+Sort 예시 1번
+
+```
+Sort sort1 = Sort.by("number").ascending();
+Sort sort2 = Sort.by("orderDate").descending();
+
+Sort sort = sortl.and(sort2);
+```
+
+Sort 예시 2번 (1번을 짧게 표현)
+
+```
+Sort sort = Sort.by("number").ascending().and(Sort.by("orderDate").descending());
+```
+
+### **\* 페이징 처리하기**
+
+\- Pageable 타입 파라미터를 사용하면 페이징을 자동으로 처리해줌
+
+### **\* JPA 동적 인스턴스 생성**
+
+\- JPA는 쿼리 결과에서 임의의 객체를 동적으로 생성할 수 있는 기능을 제공함
+
+\- 쉽게 말하면, **쿼리 결과를 DTO로 바로 매핑이 가능**하다!
+
+\- @Query 어노테이션과 new 키워드를 활용하면 된다.
+
+```
+@Query("SELECT new com.example.dto.UserDto(u.id, u.name) FROM User u WHERE u.status = :status")
+List<UserDto> findUsersByStatus(@Param("status") String status);
+```
+
+위와 같이 JPQL을 사용해서 그 결과를 DTO로 바로 매핑이 가능하다.
+
+\> SELECT절의 new 키워드와 @Query 어노테이션 사용
+
+### **\* JPA 하이버네이트 @Subselect 사용**
+
+\- @Subselect는 쿼리 결과를 @Entity로 매핑할 수 있는 기능!
+
+\- 데이터베이스 뷰를 만들기 어려운 상황에서, 임시로 복잡한 쿼리 결과를 엔티티처럼 다루고 싶을 때 주로 사용함
+
+\- **실제 테이블이 생기는 것이 아니기 때문에 읽기 전용 작업에서만 사용이 가능하다 쓰기 작업 불가능!**
+
+\- 보통 대부분의 경우, **복잡한 쿼리 결과는 DTO로 직접 매핑해서 반환하는것이 더 명확하고 유지보수에도 유리함**
